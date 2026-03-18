@@ -1,0 +1,7 @@
+{
+  "name": "anonymous-comment-v2",
+  "workspaces": [
+    "serverless",
+    "web"
+  ]
+}
