@@ -1,5 +1,9 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, nextTick, watch, computed } from 'vue';
+import HeaderBar from './components/HeaderBar.vue';
+import ToastNotification from './components/ToastNotification.vue';
+import MessageList from './components/MessageList.vue';
+import FooterBar from './components/FooterBar.vue';
 
 // 1. 定义评论的数据结构 (Interface)
 interface Comment {
@@ -59,6 +63,7 @@ const vcomments = ref<VComment[]>([]);
 const isLoadingHistory = ref<boolean>(false);
 const hasMoreHistory = ref<boolean>(true); // 标记是否还有更多历史记录
 const topTriggerRef = ref<HTMLElement | null>(null); // 获取触发器的 DOM 引用
+const messageListRef = ref<any>(null);
 const adminAvatarUrl = ref<string>((import.meta.env as any).VITE_ADMIN_AVATAR_URL);
 // 文件上传相关
 const selectedFile = ref<File | null>(null);
@@ -235,7 +240,9 @@ const scrollToBottom = async (): Promise<void> => {
 
 const formatTime = (t: string | number | Date): string => {
   const d = new Date(t);
-  return `${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`;
+  const date = `${d.getFullYear()}.${(d.getMonth() + 1).toString().padStart(2, '0')}.${d.getDate().toString().padStart(2, '0')}`;
+  const time = `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
+  return `${date} ${time}`;
 };
 
 const requestComments = async (bt?: number) => {
@@ -301,13 +308,22 @@ onMounted(async () => {
   await Promise.all([
     requestComments()
   ]);
+
   await Promise.all([
     loadImage(adminAvatarUrl.value),
     ...vcomments.value.map(c => c.image_url ? loadImage(SUPABASE_STORAGE_BASE_URL + c.image_url) : Promise.resolve()),
   ]);
-  await scrollToBottom();
   
-  // 初始化完成后，开始监听顶部触发器
+
+  // 初始化完成后，从 MessageList 子组件读取 refs 并开始监听顶部触发器
+  if (messageListRef && messageListRef.value) {
+    // the child exposes refs; they may be refs to DOM elements
+    const child = messageListRef.value as any;
+    chatBox.value = child.box?.value ?? child.box;
+    topTriggerRef.value = child.topTrigger?.value ?? child.topTrigger;
+
+    await scrollToBottom();
+  }
   if (topTriggerRef.value) {
     observer.observe(topTriggerRef.value);
   }
@@ -324,124 +340,30 @@ onUnmounted(() => {
 <template>
   <div :class="['app-container', { 'dark': isDark }]">
 
-    <div :class="['toast-notification', { 'show': showError }]">
-      <svg viewBox="0 0 24 24" width="20" height="20" class="error-icon">
-        <path fill="currentColor"
-          d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z" />
-      </svg>
-      {{ errorMessage }}
-    </div>
+    <ToastNotification :show="showError" :message="errorMessage" />
 
-    <header class="chat-header">
-      <div class="header-left">
-        <h1 class="brand-title">Anonymous Comment</h1>
-        <div class="admin-settings">
-          <span class="label">Admin key:</span>
-          <input v-model="adminKey" @change="checkAuthenKey" type="text" class="text-input" />
-          <i :class="['fas', authStatusIcons[authStatus], { 'fa-spin': authStatus === 'loading' }]"></i>
-        </div>
-      </div>
+  <HeaderBar :adminKey="adminKey" :authStatus="authStatus" :authStatusIcons="authStatusIcons" :isDark="isDark" @check="checkAuthenKey" @update:adminKey="val => adminKey = val" @toggleTheme="toggleTheme" />
 
-      <div class="header-right">
-        <button @click="toggleTheme" class="theme-btn">{{ isDark ? '🌙' : '☀️' }}</button>
-      </div>
-    </header>
-
-    <main class="chat-main" ref="chatBox">
-      <div class="top-trigger" ref="topTriggerRef">
+    <MessageList ref="messageListRef" :msgs="vcomments" :adminAvatarUrl="adminAvatarUrl" :formatTime="formatTime" @reply="setReply">
+      <template #top-trigger>
         <i v-if="isLoadingHistory" class="fa-solid fa-spin fa-snowflake"></i>
         <span v-else-if="!hasMoreHistory" class="no-more-text">There is no earlier news.</span>
-      </div>
+      </template>
+    </MessageList>
 
-      <div v-for="msg in vcomments" :key="msg.id" class="message-row">
-        <div class="avatar-circle">
-          <template v-if="msg.role === 'admin'"><img :src="adminAvatarUrl" alt=""></template>
-          <template v-else>{{ msg.user_id.charAt(0).toUpperCase() }}</template>
-        </div>
+    <FooterBar :currentUser="currentUser" :selectedFile="selectedFile" :filePreviewUrl="filePreviewUrl" :quotingMsg="quotingMsg" :newMessage="newMessage" :isSending="isSending"
+      @update:currentUser="val => currentUser = val"
+      @remove-file="removeFile"
+      @cancel-reply="quotingMsg = null"
+      @update:newMessage="val => newMessage = val"
+      @file-change="onFileChange"
+      @send="sendMessage"
+    />
 
-        <div class="message-content-area">
-          <div class="message-info">
-            <span v-if="msg.role === 'admin'" class="admin-label">Administrator</span>
-            <span :class="['user-name']">
-              {{ msg.user_id }}
-            </span>
-            <span class="timestamp">{{ formatTime(msg.created_at) }}</span>
-          </div>
-
-          <div class="bubble-and-actions">
-            <div :class="['bubble']" @click="setReply(msg)">
-              <div v-if="msg.quote_id" class="quote-preview">
-                <small>Reply 
-                  <span v-if="msg.quoted_role === 'admin'" class="admin-label">Administrator</span>
-                  {{ msg.quoted_user_id }}:
-                </small>
-                
-                <p>{{ msg.quoted_content }}</p>
-
-                <img v-if="msg.quoted_image_url" :src="SUPABASE_STORAGE_BASE_URL + msg.quoted_image_url" alt="quoted image" />
-              </div>
-              <p class="text">{{ msg.content }}</p>
-
-              <img v-if="msg.image_url" :src="SUPABASE_STORAGE_BASE_URL + msg.image_url" alt="uploaded image" />
-            </div>
-
-            <button class="action-reply-btn" @click="setReply(msg)">
-              <svg viewBox="0 0 24 24" width="16" height="16">
-                <path fill="currentColor" d="M10 9V5l-7 7 7 7v-4.1c5 0 8.5 1.6 11 5.1-1-5-4-10-11-11z" />
-              </svg>
-              Reply
-            </button>
-          </div>
-        </div>
-      </div>
-    </main>
-
-    <footer class="chat-footer">
-      <div class="user-settings">
-        <span class="label">Name:</span>
-        <input v-model="currentUser" type="text" class="text-input" />
-      </div>
-      <div class="input-container">
-          <div class="file-upload-row">
-            <div v-if="selectedFile" class="file-preview">
-              <template v-if="filePreviewUrl">
-                <img :src="filePreviewUrl" alt="preview" />
-              </template>
-              <template v-else>
-                <span class="file-name">{{ selectedFile.name }}</span>
-              </template>
-              <button class="remove-file" @click="removeFile">✕</button>
-            </div>
-          </div>
-        <div v-if="quotingMsg" class="reply-bar">
-          <div class="reply-bar-content">
-            <span class="reply-user">Reply @{{ quotingMsg.user_id }}</span>
-            <span class="reply-preview">{{ quotingMsg.content }}</span>
-          </div>
-          <button class="cancel-reply" @click="quotingMsg = null">✕</button>
-        </div>
-
-        <div :class="['input-box', { 'has-reply': quotingMsg }]">
-          <textarea v-model="newMessage" placeholder="Write your comment here..." @keydown.enter.exact.prevent="sendMessage"
-            :disabled="isSending"></textarea>
-          <label class="file-label" for="file-input">
-            <i class="fa-solid fa-arrow-up-from-bracket file-label-text"></i>
-            <input id="file-input" type="file" @change="onFileChange" />
-            <!-- <span class="file-label-text">Attach</span> -->
-          </label>
-          <button class="send-btn" :disabled="(!newMessage.trim() && !selectedFile) || isSending" @click="sendMessage">
-            <svg v-if="!isSending" viewBox="0 0 24 24" width="20" height="20">
-              <path fill="currentColor" d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"></path>
-            </svg>
-            <span v-else class="sending-dots">...</span>
-          </button>
-        </div>
-      </div>
-    </footer>
   </div>
 </template>
 
-<style scoped>
+<style>
 /* 原有的样式部分保持不变... (为节省篇幅不重复列出) */
 .app-container {
   --bg-app: #f8fafc;
@@ -689,7 +611,7 @@ onUnmounted(() => {
 
 .bubble-and-actions img {
   margin-top: 8px;
-  max-width: 200px;
+  max-width: 320px;
   border-radius: 6px;
 }
 
@@ -830,29 +752,8 @@ onUnmounted(() => {
   margin-bottom: 8px;
 }
 
-.file-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  cursor: pointer;
-}
-
 .file-label input[type="file"] {
   display: none;
-}
-
-.file-label-text {
-  background: var(--accent);
-  color: white;
-  border: none;
-  width: 36px;
-  height: 36px;
-  border-radius: 10px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: opacity 0.3s;
 }
 
 .file-preview {
@@ -910,7 +811,7 @@ textarea:disabled {
   opacity: 0.7;
 }
 
-.send-btn {
+.send-btn, .file-label {
   background: var(--accent);
   color: white;
   border: none;

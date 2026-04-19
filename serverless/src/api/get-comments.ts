@@ -1,12 +1,13 @@
 import { Handler } from "hono";
-import { AMComment, AMEnv, AMResponse } from "../type";
+import { AMComment, AMContext, AMResponse } from "../type";
 
-const getComments: Handler<AMEnv> = async (c) => {
+export const getComments: Handler<AMContext> = async (c) => {
     const bt = c.req.query("bt");
     try {
         interface AMVComment extends AMComment { 
             quoted_user_id?: string; 
-            quoted_content?: string ;
+            quoted_content?: string;
+            quoted_image_url?: string;
             quoted_created_at?: string;
             quoted_quoted_id?: number;
             quoted_role?: 'user' | 'admin'
@@ -36,5 +37,3 @@ const getComments: Handler<AMEnv> = async (c) => {
         })
     }
 };
-
-export { getComments }

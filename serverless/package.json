@@ -9,6 +9,7 @@
 		"cf-typegen": "wrangler types"
 	},
 	"dependencies": {
+		"@aws-sdk/client-s3": "^3.1032.0",
 		"chanfana": "^2.6.3",
 		"hono": "^4.6.20",
 		"zod": "^3.24.1"

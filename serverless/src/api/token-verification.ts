@@ -1,7 +1,7 @@
 import { Handler } from "hono";
 import { AMEnv, AMResponse } from "../type";
 
-const tokenVerification: Handler<AMEnv> = async (c) => {
+export const tokenVerification: Handler<AMEnv> = async (c) => {
     const role = c.get("role");
     if (role === "admin") {
         return c.json<AMResponse>({
@@ -17,5 +17,3 @@ const tokenVerification: Handler<AMEnv> = async (c) => {
         });
     }
 }
-
-export { tokenVerification }

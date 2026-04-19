@@ -42,6 +42,7 @@ jobs:
         env:
           VITE_APP_BASE: /${{ github.event.repository.name }}/
           VITE_CLOUDFLARE_WORKERS_URL: ${{ vars.VITE_CLOUDFLARE_WORKERS_URL }}
+          VITE_SUPABASE_PROJECT_ID: ${{ vars.VITE_SUPABASE_PROJECT_ID }}
           VITE_ADMIN_AVATAR_URL: ${{ vars.VITE_ADMIN_AVATAR_URL }}
       - name: Setup Pages
         uses: actions/configure-pages@v5

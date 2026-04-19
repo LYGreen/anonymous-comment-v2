@@ -19,6 +19,7 @@ class DiscordNotification extends Notification {
                         content: "```json\n" +
                             `"user_id": "${comment.user_id}"\n` +
                             `"content": "${comment.content}"\n` +
+                            `"image_url": "${comment.image_url}"\n` +
                             `"quote_id": "${comment.quote_id}"\n` +
                             `"role": "${comment.role}"\n` +
                             "```",
