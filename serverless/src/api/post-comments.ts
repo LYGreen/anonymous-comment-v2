@@ -57,7 +57,8 @@ export const postComments: Handler<AMContext> = async (c) => {
         const role = c.get("role");
         const file = formData.get("file") as File | null;
         const uuid = crypto.randomUUID();
-        const imageUrl = `/images/${uuid}`;
+        const imgId = `${new Date().toISOString()}-${uuid}`;
+        const imageUrl = `/images/${imgId}`;
 
         const amComment: AMComment = {
             user_id: body.data.user_id,
@@ -79,7 +80,7 @@ export const postComments: Handler<AMContext> = async (c) => {
 
         const command = new PutObjectCommand({
             Bucket: c.env.S3_BUCKET,
-            Key: uuid,
+            Key: imgId,
             Body: await file?.bytes(),
             ContentType: file?.type,
         });
