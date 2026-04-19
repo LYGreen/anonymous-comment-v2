@@ -5,7 +5,8 @@ import { ref, onMounted, onUnmounted, nextTick, watch, computed } from 'vue';
 interface Comment {
   id: number;
   user_id: string;
-  content: string;
+  content?: string;
+  image_url?: string;
   quote_id: number | null;
   created_at: string;
   role: 'admin' | 'user';
@@ -13,10 +14,11 @@ interface Comment {
 
 interface VComment extends Comment { 
     quoted_user_id?: string; 
-    quoted_content?: string ;
+    quoted_content?: string;
+    quoted_image_url?: string;
     quoted_created_at?: string;
     quoted_quoted_id?: number;
-    quoted_role?: 'user' | 'admin'
+    quoted_role?: 'user' | 'admin';
 }
 
 interface AMResponse {
@@ -26,6 +28,8 @@ interface AMResponse {
 }
 
 const CLOUDFLARE_WORKERS_URL =  (import.meta.env as any).VITE_CLOUDFLARE_WORKERS_URL;
+const SUPABASE_PROJECT_ID = (import.meta.env as any).VITE_SUPABASE_PROJECT_ID;
+const SUPABASE_STORAGE_BASE_URL = `https://${SUPABASE_PROJECT_ID}.supabase.co/storage/v1/object/public`
 
 const authStatusIcons = {
   "empty": "fa-question-circle",
@@ -56,6 +60,10 @@ const isLoadingHistory = ref<boolean>(false);
 const hasMoreHistory = ref<boolean>(true); // 标记是否还有更多历史记录
 const topTriggerRef = ref<HTMLElement | null>(null); // 获取触发器的 DOM 引用
 const adminAvatarUrl = ref<string>((import.meta.env as any).VITE_ADMIN_AVATAR_URL);
+// 文件上传相关
+const selectedFile = ref<File | null>(null);
+const filePreviewUrl = ref<string | null>(null);
+const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB 限制
 
 const checkAuthenKey = async (): Promise<void> => {
   if (authTimeout.value) {
@@ -115,51 +123,107 @@ const triggerError = (msg: string) => {
 };
 
 // 修改：将发送函数改为异步，并加入 try...catch 处理错误
+const onFileChange = (e: Event) => {
+  const input = e.target as HTMLInputElement;
+  const f = input.files && input.files[0] ? input.files[0] : null;
+  if (!f) return;
+
+  if (f.size > MAX_FILE_SIZE) {
+    triggerError(`文件过大，最大 ${Math.round(MAX_FILE_SIZE / 1024 / 1024)}MB`);
+    input.value = '';
+    return;
+  }
+
+  selectedFile.value = f;
+  if (f.type.startsWith('image/')) {
+    filePreviewUrl.value = URL.createObjectURL(f);
+  } else {
+    filePreviewUrl.value = null;
+  }
+};
+
+const removeFile = () => {
+  if (filePreviewUrl.value) {
+    URL.revokeObjectURL(filePreviewUrl.value);
+  }
+  selectedFile.value = null;
+  filePreviewUrl.value = null;
+  // 清空 file input DOM 可能需要用户再次选择同一文件
+  const fi = document.getElementById('file-input') as HTMLInputElement | null;
+  if (fi) fi.value = '';
+};
+
 const sendMessage = async (): Promise<void> => {
-  if (!newMessage.value.trim() || isSending.value) return;
+  if (!newMessage.value.trim() && !selectedFile.value) return;
+  if (isSending.value) return;
 
   isSending.value = true;
-
   const url = new URL('/api/comments', CLOUDFLARE_WORKERS_URL);
 
-  // 发送数据
-  const res = await fetch(url.toString(), {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${adminKey.value}`
-    },
-    body: JSON.stringify({
-      data: {
+  try {
+    let res: Response;
+
+    if (selectedFile.value) {
+      // 当包含文件时，使用 FormData 提交，后端需支持 multipart/form-data
+      const form = new FormData();
+      const payload = {
         user_id: currentUser.value,
         content: newMessage.value,
         quote_id: quotingMsg.value ? quotingMsg.value.id : null
-      }
-    })
-  });
+      } as any;
+      form.append('data', JSON.stringify({ data: payload }));
+      form.append('file', selectedFile.value, selectedFile.value.name);
 
-  const json = await res.json() as AMResponse;
-  const comment = json.data as Comment;
+      res = await fetch(url.toString(), {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${adminKey.value}`
+        },
+        body: form
+      });
+    } else {
+      // 纯文本的原有路径
+      res = await fetch(url.toString(), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${adminKey.value}`
+        },
+        body: JSON.stringify({
+          data: {
+            user_id: currentUser.value,
+            content: newMessage.value,
+            quote_id: quotingMsg.value ? quotingMsg.value.id : null
+          }
+        })
+      });
+    }
 
-  if (json?.status === 200) {
-    // 发送成功，将数据推入本地数组
-    vcomments.value.push({
-      ...comment,
-      quoted_user_id: quotingMsg.value?.user_id,
-      quoted_content: quotingMsg.value?.content,
-      quoted_created_at: quotingMsg.value?.created_at,
-      quoted_role: quotingMsg.value?.role
-    });
+    const json = await res.json() as AMResponse;
+    const comment = json.data as Comment;
 
-    newMessage.value = '';
-    quotingMsg.value = null;
-    scrollToBottom();
-  } else {
-    // 发送失败，触发错误提示
-    triggerError(json.message || '发送失败，请稍后再试');
+    if (json?.status === 200) {
+      vcomments.value.push({
+        ...comment,
+        quoted_user_id: quotingMsg.value?.user_id,
+        quoted_content: quotingMsg.value?.content,
+        quoted_image_url: quotingMsg.value?.image_url,
+        quoted_created_at: quotingMsg.value?.created_at,
+        quoted_role: quotingMsg.value?.role
+      });
+
+      newMessage.value = '';
+      quotingMsg.value = null;
+      removeFile();
+      await scrollToBottom();
+    } else {
+      triggerError(json.message || '发送失败，请稍后再试');
+    }
+  } catch (err: any) {
+    triggerError(err?.message || String(err) || '发送过程中发生错误');
+  } finally {
+    isSending.value = false;
   }
-
-  isSending.value = false;
 };
 
 const scrollToBottom = async (): Promise<void> => {
@@ -224,14 +288,23 @@ const loadHistory = async () => {
 
 const topCommentId = computed(() => vcomments.value.length > 0 ? vcomments.value[0]?.id : undefined)
 
-const avatarPreload = () => {
-  const img = new Image();
-  img.src = adminAvatarUrl.value;
-}
+const loadImage = (url: string) => {
+  return new Promise<void>((resolve, reject) => {
+    const img = new Image();
+    img.src = url;
+    img.onload = () => resolve();
+    img.onerror = () => reject(new Error('Image load failed'));
+  });
+};
 
 onMounted(async () => {
-  avatarPreload();
-  await requestComments();
+  await Promise.all([
+    requestComments()
+  ]);
+  await Promise.all([
+    loadImage(adminAvatarUrl.value),
+    ...vcomments.value.map(c => c.image_url ? loadImage(SUPABASE_STORAGE_BASE_URL + c.image_url) : Promise.resolve()),
+  ]);
   await scrollToBottom();
   
   // 初始化完成后，开始监听顶部触发器
@@ -304,8 +377,12 @@ onUnmounted(() => {
                 </small>
                 
                 <p>{{ msg.quoted_content }}</p>
+
+                <img v-if="msg.quoted_image_url" :src="SUPABASE_STORAGE_BASE_URL + msg.quoted_image_url" alt="quoted image" />
               </div>
               <p class="text">{{ msg.content }}</p>
+
+              <img v-if="msg.image_url" :src="SUPABASE_STORAGE_BASE_URL + msg.image_url" alt="uploaded image" />
             </div>
 
             <button class="action-reply-btn" @click="setReply(msg)">
@@ -325,6 +402,17 @@ onUnmounted(() => {
         <input v-model="currentUser" type="text" class="text-input" />
       </div>
       <div class="input-container">
+          <div class="file-upload-row">
+            <div v-if="selectedFile" class="file-preview">
+              <template v-if="filePreviewUrl">
+                <img :src="filePreviewUrl" alt="preview" />
+              </template>
+              <template v-else>
+                <span class="file-name">{{ selectedFile.name }}</span>
+              </template>
+              <button class="remove-file" @click="removeFile">✕</button>
+            </div>
+          </div>
         <div v-if="quotingMsg" class="reply-bar">
           <div class="reply-bar-content">
             <span class="reply-user">Reply @{{ quotingMsg.user_id }}</span>
@@ -336,7 +424,12 @@ onUnmounted(() => {
         <div :class="['input-box', { 'has-reply': quotingMsg }]">
           <textarea v-model="newMessage" placeholder="Write your comment here..." @keydown.enter.exact.prevent="sendMessage"
             :disabled="isSending"></textarea>
-          <button class="send-btn" :disabled="!newMessage.trim() || isSending" @click="sendMessage">
+          <label class="file-label" for="file-input">
+            <i class="fa-solid fa-arrow-up-from-bracket file-label-text"></i>
+            <input id="file-input" type="file" @change="onFileChange" />
+            <!-- <span class="file-label-text">Attach</span> -->
+          </label>
+          <button class="send-btn" :disabled="(!newMessage.trim() && !selectedFile) || isSending" @click="sendMessage">
             <svg v-if="!isSending" viewBox="0 0 24 24" width="20" height="20">
               <path fill="currentColor" d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"></path>
             </svg>
@@ -594,6 +687,12 @@ onUnmounted(() => {
   gap: 10px;
 }
 
+.bubble-and-actions img {
+  margin-top: 8px;
+  max-width: 200px;
+  border-radius: 6px;
+}
+
 .bubble {
   padding: 12px 16px;
   background: var(--bg-bubble);
@@ -658,6 +757,11 @@ onUnmounted(() => {
   white-space: nowrap;
 }
 
+.quote-preview img {
+  max-width: 60px;
+  border-radius: 6px;
+}
+
 .chat-footer {
   padding: 15px;
   background: var(--bg-header);
@@ -717,6 +821,72 @@ onUnmounted(() => {
   display: flex;
   align-items: flex-end;
   gap: 10px;
+}
+
+.file-upload-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.file-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.file-label input[type="file"] {
+  display: none;
+}
+
+.file-label-text {
+  background: var(--accent);
+  color: white;
+  border: none;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: opacity 0.3s;
+}
+
+.file-preview {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--input-bg);
+  border: 1px solid var(--border);
+  padding: 6px 8px;
+  border-radius: 8px;
+}
+
+.file-preview img {
+  width: 48px;
+  height: 48px;
+  object-fit: cover;
+  border-radius: 6px;
+}
+
+.file-name {
+  font-size: 12px;
+  color: var(--text-muted);
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.remove-file {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-weight: bold;
 }
 
 .input-box.has-reply {
