@@ -6,6 +6,7 @@ import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 export const postComments: Handler<AMContext> = async (c) => {
     const req = c.req;
     const contentType = req.header("content-type") || "";
+    const remainder = new DiscordNotification(c.env.DISCORD_WEBHOOK_URL);
 
     if (contentType.startsWith("application/json")) {
         const body = await req.json() as AMBody;
@@ -17,8 +18,6 @@ export const postComments: Handler<AMContext> = async (c) => {
             quote_id: body.data.quote_id ?? null,
             role: role,
         };
-
-        const remainder = new DiscordNotification(c.env.DISCORD_WEBHOOK_URL);
 
         let response: AMResponse | undefined;
 
@@ -106,6 +105,10 @@ export const postComments: Handler<AMContext> = async (c) => {
                 status: 200,
                 message: "Sent successfully",
                 data: (inserted.results as any)[0],
+            }
+
+            if (response.status === 200 && c.env.ENVIRONMENT === "production") {
+                await remainder.remain(amComment);
             }
         } catch (err) {
             console.log("Error:", err);
